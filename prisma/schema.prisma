@@ -1,0 +1,436 @@
+// Skema Prisma — Fase 2.
+// Model auth/kepegawaian mengikuti ASUMSI dokumen teknis §5 (cocokkan dengan DB CI4 sebelum migrasi data).
+// Model Bangkom (Jenis → Kompetensi → Program → Pelatihan) ditambahkan di sini karena guard 409
+// pada master (JF, Jenjang, Sertifikasi, Sub Jenis) perlu tabel pemakainya. CRUD-nya di Fase 3–5.
+// ID publik TIDAK disimpan sebagai kolom: diturunkan dari id lewat Sqids (src/server/ids.ts).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // Neon pooled (runtime)
+  directUrl = env("DIRECT_URL") // Neon direct (migrasi)
+}
+
+enum AuthProvider {
+  LOCAL
+  GOOGLE
+}
+
+// ---------- Auth & RBAC ----------
+model User {
+  id           BigInt       @id @default(autoincrement())
+  username     String       @unique // NIP setelah onboarding; "g-<sub>" sebelum
+  nama         String
+  email        String?      @unique // disimpan lowercase
+  passwordHash String? // NULL untuk akun Google-only
+  googleId     String?      @unique
+  authProvider AuthProvider @default(LOCAL)
+  statusAktif  Boolean      @default(true)
+  idInstansi   BigInt?
+  instansi     Instansi?    @relation(fields: [idInstansi], references: [id])
+  roles        UserRole[]
+  pegawai      Pegawai?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+}
+
+model Role {
+  id          BigInt           @id @default(autoincrement())
+  kode        String           @unique
+  nama        String
+  users       UserRole[]
+  permissions RolePermission[]
+}
+
+model Permission {
+  id    BigInt           @id @default(autoincrement())
+  kode  String           @unique // mis. "pelatihan.view"
+  roles RolePermission[]
+}
+
+model UserRole {
+  userId BigInt
+  roleId BigInt
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id])
+
+  @@id([userId, roleId])
+}
+
+model RolePermission {
+  roleId       BigInt
+  permissionId BigInt
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model AuditLog {
+  id        BigInt   @id @default(autoincrement())
+  aksi      String
+  entitas   String?
+  entitasId String?
+  actor     String?
+  actorRole String?
+  ip        String?
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  @@index([entitas, entitasId])
+  @@index([aksi, createdAt])
+}
+
+// ---------- Master ----------
+model Instansi {
+  id          BigInt              @id @default(autoincrement())
+  nama        String
+  jenis       Int // 1 Pusat/Pembina, 2 Daerah, 3 Pembina lain, 4 Lainnya
+  statusAktif Boolean             @default(true)
+  users       User[]
+  jf          Jf[]
+  penempatan  PegawaiPenempatan[]
+  unitOrganisasi UnitOrganisasi[]
+  unitKerja      UnitKerja[]
+}
+
+model Jf {
+  id          BigInt              @id @default(autoincrement())
+  idInstansi  BigInt
+  kodeJf      String?
+  namaJf      String
+  statusAktif Boolean             @default(true)
+  instansi    Instansi            @relation(fields: [idInstansi], references: [id])
+  penempatan  PegawaiPenempatan[]
+  kompetensi  Kompetensi[]
+  programs    ProgramBangkom[]
+}
+
+enum RumpunJabatan {
+  KEAHLIAN
+  KETERAMPILAN
+}
+
+model JenjangJabatan {
+  id          BigInt              @id @default(autoincrement())
+  nama        String
+  rumpun      RumpunJabatan       @default(KEAHLIAN) // urutan hanya dibandingkan dalam rumpun yang sama (Learning Path)
+  urutan      Int // NON-unik (sesuai CI4): dua rumpun jabatan berbagi urutan 1..4. Dibandingkan hanya dalam rumpun yang sama.
+  statusAktif Boolean             @default(true)
+  penempatan  PegawaiPenempatan[]
+  pelatihan   PelatihanJenjang[]
+
+  @@index([rumpun, urutan])
+}
+
+model Sertifikasi {
+  id          BigInt                 @id @default(autoincrement())
+  nama        String
+  statusAktif Boolean                @default(true)
+  pelatihan   PelatihanSertifikasi[]
+}
+
+// ---------- Bangkom ----------
+model JenisKompetensi {
+  id          BigInt                  @id @default(autoincrement())
+  namaJenis   String                  @unique
+  statusAktif Boolean                 @default(true)
+  details     JenisKompetensiDetail[]
+  createdBy   String?
+  updatedBy   String?
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+}
+
+model JenisKompetensiDetail {
+  id          BigInt           @id @default(autoincrement())
+  idJenis     BigInt
+  namaDetail  String
+  statusAktif Boolean          @default(true)
+  jenis       JenisKompetensi  @relation(fields: [idJenis], references: [id])
+  kompetensi  Kompetensi[]
+  programs    ProgramBangkom[]
+
+  @@unique([idJenis, namaDetail])
+}
+
+model Kompetensi {
+  id              BigInt                @id @default(autoincrement())
+  idJf            BigInt
+  idJenisDetail   BigInt
+  namaKompetensi  String
+  statusAktif     Boolean               @default(true)
+  jf              Jf                    @relation(fields: [idJf], references: [id])
+  detail          JenisKompetensiDetail @relation(fields: [idJenisDetail], references: [id])
+  pelatihan       PelatihanKompetensi[]
+  createdBy       String?
+  updatedBy       String?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  deletedAt       DateTime?
+
+  @@unique([idJf, idJenisDetail, namaKompetensi])
+}
+
+model ProgramBangkom {
+  id            BigInt                @id @default(autoincrement())
+  idJf          BigInt
+  idJenisDetail BigInt
+  namaProgram   String
+  deskripsi     String?
+  kategori      String?
+  statusAktif   Boolean               @default(true)
+  jf            Jf                    @relation(fields: [idJf], references: [id])
+  detail        JenisKompetensiDetail @relation(fields: [idJenisDetail], references: [id])
+  pelatihan     Pelatihan[]
+  createdBy     String?
+  updatedBy     String?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  deletedAt     DateTime?
+
+  @@unique([idJf, idJenisDetail, namaProgram])
+}
+
+model Pelatihan {
+  id                BigInt                 @id @default(autoincrement())
+  idProgram         BigInt
+  namaPelatihan     String                 @db.VarChar(500)
+  deskripsi         String?
+  isPeriode         Boolean                @default(false)
+  kPeriode          Int?                   @db.SmallInt
+  isRefreshment     Boolean                @default(false)
+  kRefreshment      Int?                   @db.SmallInt
+  isSertifikat      Boolean                @default(false)
+  jenisPelatihan    String? // data CI4: "Mutlak" (nilai lain belum diketahui)
+  kategoriPelatihan String? // data CI4: Dasar | Teknis (BUKAN Wajib/Pilihan; itu kategori Program)
+  statusAktif       Boolean                @default(true)
+  program           ProgramBangkom         @relation(fields: [idProgram], references: [id])
+  jenjang           PelatihanJenjang[]
+  kompetensi        PelatihanKompetensi[]
+  sertifikasi       PelatihanSertifikasi[]
+  batch             PelatihanBatch[]
+  usulan            PelatihanUsulan[]
+  createdBy         String?
+  updatedBy         String?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+  deletedAt         DateTime?
+}
+
+// Pivot prasyarat: PK komposit + ON DELETE CASCADE dari pelatihan (perbaikan L5)
+model PelatihanJenjang {
+  idPelatihan BigInt
+  idJenjang   BigInt
+  pelatihan   Pelatihan      @relation(fields: [idPelatihan], references: [id], onDelete: Cascade)
+  jenjang     JenjangJabatan @relation(fields: [idJenjang], references: [id])
+
+  @@id([idPelatihan, idJenjang])
+}
+
+model PelatihanKompetensi {
+  idPelatihan   BigInt
+  idKompetensi  BigInt
+  pelatihan     Pelatihan  @relation(fields: [idPelatihan], references: [id], onDelete: Cascade)
+  kompetensi    Kompetensi @relation(fields: [idKompetensi], references: [id])
+
+  @@id([idPelatihan, idKompetensi])
+}
+
+model PelatihanSertifikasi {
+  idPelatihan    BigInt
+  idSertifikasi  BigInt
+  pelatihan      Pelatihan   @relation(fields: [idPelatihan], references: [id], onDelete: Cascade)
+  sertifikasi    Sertifikasi @relation(fields: [idSertifikasi], references: [id])
+
+  @@id([idPelatihan, idSertifikasi])
+}
+
+// ---------- Kepegawaian ----------
+model Pegawai {
+  id           BigInt              @id @default(autoincrement())
+  idUser       BigInt?             @unique
+  nip          String              @unique
+  nama         String
+  email        String?
+  hp           String?
+  telp         String?
+  tempatLahir  String?
+  tglLahir     DateTime?           @db.Date
+  jenisKelamin String? // "L" | "P"
+  agama        String?
+  alamat       String?
+  pendidikan   String?
+  jurusan      String?
+  golongan     String?
+  tmt          DateTime?           @db.Date
+  user         User?               @relation(fields: [idUser], references: [id])
+  penempatan   PegawaiPenempatan[]
+  usulan       PelatihanUsulan[]
+  peserta      PelatihanPesertaBatch[]
+  createdBy    String?
+  updatedBy    String?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  deletedAt    DateTime?
+}
+
+model PegawaiPenempatan {
+  id               BigInt          @id @default(autoincrement())
+  idPegawai        BigInt
+  idInstansi       BigInt
+  idUnitOrganisasi BigInt?
+  idUnitKerja      BigInt?
+  idJf             BigInt?
+  idJenjang        BigInt?
+  statusPegawai    String? // PNS | PPPK
+  tglMulai         DateTime        @db.Date
+  tglSelesai       DateTime?       @db.Date // NULL = penempatan aktif
+  noSk             String?
+  keterangan       String?
+  pegawai          Pegawai         @relation(fields: [idPegawai], references: [id])
+  instansi         Instansi        @relation(fields: [idInstansi], references: [id])
+  jf               Jf?             @relation(fields: [idJf], references: [id])
+  jenjang          JenjangJabatan? @relation(fields: [idJenjang], references: [id])
+  unitOrganisasi   UnitOrganisasi? @relation(fields: [idUnitOrganisasi], references: [id])
+  unitKerja        UnitKerja?      @relation(fields: [idUnitKerja], references: [id])
+
+  @@index([idPegawai, tglSelesai])
+}
+
+// Master unit (dari CI4 m_unit_organisasi / m_unit_kerja). CRUD-nya belum dibangun; saat ini diisi lewat migrasi.
+model UnitOrganisasi {
+  id          BigInt              @id @default(autoincrement())
+  idInstansi  BigInt
+  kode        String
+  nama        String
+  statusAktif Boolean             @default(true)
+  instansi    Instansi            @relation(fields: [idInstansi], references: [id])
+  unitKerja   UnitKerja[]
+  penempatan  PegawaiPenempatan[]
+
+  @@unique([idInstansi, kode])
+}
+
+model UnitKerja {
+  id               BigInt              @id @default(autoincrement())
+  idInstansi       BigInt
+  idUnitOrganisasi BigInt?
+  kode             String
+  nama             String
+  statusAktif      Boolean             @default(true)
+  instansi         Instansi            @relation(fields: [idInstansi], references: [id])
+  unitOrganisasi   UnitOrganisasi?     @relation(fields: [idUnitOrganisasi], references: [id])
+  penempatan       PegawaiPenempatan[]
+
+  @@unique([idInstansi, kode])
+}
+
+// ---------- Fase 7a: batch, peserta, usulan (disesuaikan dengan tabel CI4) ----------
+// Kolom status memakai nilai huruf kecil seperti di CI4 (CHECK di prisma/manual/fase7a-batch-usulan.sql).
+
+model Penyelenggara {
+  id        BigInt           @id @default(autoincrement())
+  nama      String           @unique @db.VarChar(200)
+  statusAktif Boolean        @default(true)
+  batch     PelatihanBatch[]
+  createdBy String?
+  updatedBy String?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  deletedAt DateTime?
+}
+
+model PelatihanBatch {
+  id               BigInt                  @id @default(autoincrement())
+  idPelatihan      BigInt
+  idPenyelenggara  BigInt?
+  tahunPelaksanaan Int                     @db.SmallInt
+  angkatan         String                  @default("I") @db.VarChar(20)
+  tanggalMulai     DateTime                @db.Date
+  tanggalSelesai   DateTime                @db.Date
+  kapasitas        Int                     @default(0) // 0 = tanpa batas
+  keterangan       String?
+  statusBatch      String                  @default("draft") @db.VarChar(20) // draft|terjadwal|berjalan|selesai|dibatalkan
+  statusAktif      Boolean                 @default(true)
+  pelatihan        Pelatihan               @relation(fields: [idPelatihan], references: [id])
+  penyelenggara    Penyelenggara?          @relation(fields: [idPenyelenggara], references: [id])
+  peserta          PelatihanPesertaBatch[]
+  createdBy        String?
+  updatedBy        String?
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+
+  @@unique([idPelatihan, tahunPelaksanaan, angkatan])
+}
+
+model PelatihanPesertaBatch {
+  id              BigInt            @id @default(autoincrement())
+  idBatch         BigInt
+  idPegawai       BigInt
+  idUsulan        BigInt?
+  statusKehadiran String            @default("terdaftar") @db.VarChar(20) // terdaftar|hadir|selesai|...
+  nilaiAkhir      Decimal?          @db.Decimal(5, 2)
+  statusLulus     String?           @db.VarChar(20) // lulus|tidak_lulus
+  statusAktif     Boolean           @default(true)
+  noSertifikat    String?           @db.VarChar(100)
+  tanggalLulus    DateTime?         @db.Date
+  keterangan      String?
+  batch           PelatihanBatch    @relation(fields: [idBatch], references: [id])
+  pegawai         Pegawai           @relation(fields: [idPegawai], references: [id])
+  usulan          PelatihanUsulan?  @relation(fields: [idUsulan], references: [id])
+  createdBy       String?
+  updatedBy       String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@unique([idBatch, idPegawai])
+}
+
+model PelatihanUsulan {
+  id               BigInt                  @id @default(autoincrement())
+  idPegawai        BigInt
+  idPelatihan      BigInt
+  tanggalUsulan    DateTime                @default(now())
+  statusUsulan     String                  @default("mengusulkan") @db.VarChar(20) // mengusulkan|diajukan|disetujui|ditolak
+  diusulkanOleh    String                  @db.VarChar(150)
+  diusulkanOlehRole String?                @db.VarChar(30)
+  alasanUsulan     String?
+  alasanPenolakan  String?
+  lampiranPath     String?                 @db.VarChar(255)
+  statusAktif      Boolean                 @default(true)
+  jalur            String?                 @db.VarChar(20) // asn_pu | non_asn_pu
+  tahapSaatIni     String?                 @db.VarChar(30)
+  pegawai          Pegawai                 @relation(fields: [idPegawai], references: [id])
+  pelatihan        Pelatihan               @relation(fields: [idPelatihan], references: [id])
+  peserta          PelatihanPesertaBatch[]
+  createdBy        String?
+  updatedBy        String?
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+
+  @@index([idPegawai, idPelatihan])
+}
+
+// Referensi kepegawaian (dari CI4 m_golongan / m_pendidikan / m_status_pegawai). Pegawai menyimpan NAMA-nya (teks);
+// mengganti nama di sini ikut memperbarui data pegawai, dan hapus ditolak bila masih dipakai.
+model Golongan {
+  id          BigInt  @id @default(autoincrement())
+  nama        String
+  statusAktif Boolean @default(true)
+}
+
+model Pendidikan {
+  id          BigInt  @id @default(autoincrement())
+  nama        String
+  statusAktif Boolean @default(true)
+}
+
+model StatusPegawai {
+  id          BigInt  @id @default(autoincrement())
+  nama        String
+  statusAktif Boolean @default(true)
+}

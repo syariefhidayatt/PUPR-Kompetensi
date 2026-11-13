@@ -1,0 +1,92 @@
+@import "tailwindcss";
+
+/* Token tema. Terang secara default, gelap mengikuti preferensi sistem. */
+:root {
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --card: #ffffff;
+  --muted: #64748b;
+  --border: #e2e8f0;
+  --primary: #0b5cab;
+  --primary-foreground: #ffffff;
+  --sidebar: #0f2744;
+  --sidebar-foreground: #dbe7f5;
+  --gap: #fee2e2;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0b1220;
+    --foreground: #e6edf7;
+    --card: #111a2c;
+    --muted: #8b9bb4;
+    --border: #1f2c45;
+    --primary: #4f9bef;
+    --primary-foreground: #06121f;
+    --sidebar: #08101d;
+    --sidebar-foreground: #c3d2e8;
+    --gap: #3b1d24;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+/* Dipakai modul Matriks (Fase 6): sel tanpa pelatihan diarsir. */
+.matrix-cell-empty {
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 6px,
+    var(--gap) 6px,
+    var(--gap) 12px
+  );
+}
+
+/* Cetak (Fase 8): sembunyikan navigasi, lebarkan tabel, tanpa latar gelap. */
+@page {
+  size: A4 landscape;
+  margin: 10mm;
+}
+@media print {
+  :root {
+    --background: #ffffff;
+    --foreground: #000000;
+    --card: #ffffff;
+    --muted: #475569;
+    --border: #cbd5e1;
+  }
+  body {
+    background: #ffffff;
+    color: #000000;
+  }
+  table {
+    font-size: 10px;
+  }
+  tr,
+  td,
+  th {
+    break-inside: avoid;
+  }
+  thead {
+    display: table-header-group;
+  }
+  .sticky {
+    position: static !important;
+  }
+}
